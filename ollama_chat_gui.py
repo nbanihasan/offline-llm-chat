@@ -10,7 +10,8 @@ from PyQt5 import QtWidgets, QtCore
 
 LOG_DIR = Path("logs")
 OLLAMA_HOST = "http://localhost:11434"
-REMOTE_MODELS_API = "https://ollama.ai/api/models"
+# Remote list of available models from Ollama's library
+REMOTE_MODELS_API = "https://ollama.com/api/tags"
 
 # Cached credentials for Ollama API access
 LOGIN_CRED = None

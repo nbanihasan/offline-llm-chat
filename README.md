@@ -23,8 +23,6 @@ This project provides a small desktop client for interacting with local models s
    python ollama_chat_gui.py
    ```
 
-The left sidebar shows previous conversations in most-recent order.  New chats can be created from the sidebar.  Use the **Models...** button to browse available models from Ollama's library and install them directly from the app.
-The first time you open the model browser you will be prompted for your Ollama
-username and password.
+The left sidebar shows previous conversations in most-recent order.  New chats can be created from the sidebar.  Use the **Models...** button to browse available models from Ollama's library and install them directly from the app. The first time you open the model browser you will be prompted for your Ollama username and password. Available models are fetched from `https://ollama.com/api/tags`.
 
 Chat transcripts are stored in the `logs/` directory.
