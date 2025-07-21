@@ -2,6 +2,7 @@ import os
 import subprocess
 import json
 import threading
+import time
 from pathlib import Path
 
 import requests
@@ -10,6 +11,9 @@ from PyQt5 import QtWidgets, QtCore
 LOG_DIR = Path("logs")
 OLLAMA_HOST = "http://localhost:11434"
 REMOTE_MODELS_API = "https://ollama.ai/api/models"
+
+# Cached credentials for Ollama API access
+LOGIN_CRED = None
 
 
 def list_installed_models():
@@ -26,10 +30,10 @@ def list_installed_models():
     return models
 
 
-def fetch_remote_models():
-    """Fetch available models from Ollama library."""
+def fetch_remote_models(auth=None):
+    """Fetch available models from Ollama library requiring authentication."""
     try:
-        resp = requests.get(REMOTE_MODELS_API, timeout=10)
+        resp = requests.get(REMOTE_MODELS_API, auth=auth, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         return data.get("models", [])
@@ -67,9 +71,39 @@ def load_log(name):
         return f.read()
 
 
-class ModelDialog(QtWidgets.QDialog):
+def summarize_title(text, max_words=5):
+    words = text.split()
+    return " ".join(words[:max_words]) if words else "chat"
+
+
+class LoginDialog(QtWidgets.QDialog):
+    """Prompt the user for Ollama credentials."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setWindowTitle("Ollama Login")
+        layout = QtWidgets.QFormLayout(self)
+        self.user_edit = QtWidgets.QLineEdit()
+        self.pass_edit = QtWidgets.QLineEdit()
+        self.pass_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+        layout.addRow("Username", self.user_edit)
+        layout.addRow("Password", self.pass_edit)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def credentials(self):
+        return self.user_edit.text(), self.pass_edit.text()
+
+
+class ModelDialog(QtWidgets.QDialog):
+    def __init__(self, auth=None, parent=None):
+        super().__init__(parent)
+        self.auth = auth
         self.setWindowTitle("Available Models")
         self.resize(400, 300)
         layout = QtWidgets.QVBoxLayout(self)
@@ -90,7 +124,7 @@ class ModelDialog(QtWidgets.QDialog):
     def load_models(self):
         self.list.clear()
         installed = set(list_installed_models())
-        models = fetch_remote_models()
+        models = fetch_remote_models(auth=self.auth)
         for m in models:
             name = m.get("name")
             size = m.get("size", "?")
@@ -118,6 +152,7 @@ class ChatWindow(QtWidgets.QWidget):
         self.resize(800, 600)
 
         self.current_conversation = None
+        self.temp_chat = False
         self.models = list_installed_models()
         self.current_model = self.models[0] if self.models else ""
 
@@ -173,26 +208,52 @@ class ChatWindow(QtWidgets.QWidget):
     def load_selected_log(self, item):
         name = item.text()
         self.current_conversation = name
+        self.temp_chat = False
         text = load_log(name)
         self.chat_view.setPlainText(text)
 
     def new_chat(self):
-        name, ok = QtWidgets.QInputDialog.getText(self, "New Chat", "Conversation name:")
-        if ok and name:
-            self.current_conversation = name
-            self.chat_view.clear()
-            log_message(name, "system", "Started conversation")
-            self.refresh_logs()
-            items = self.log_list.findItems(name, QtCore.Qt.MatchExactly)
-            if items:
-                self.log_list.setCurrentItem(items[0])
+        ts = int(time.time())
+        name = f"new_chat_{ts}"
+        self.current_conversation = name
+        self.temp_chat = True
+        self.chat_view.clear()
+        log_message(name, "system", "Started conversation")
+        self.refresh_logs()
+        items = self.log_list.findItems(name, QtCore.Qt.MatchExactly)
+        if items:
+            self.log_list.setCurrentItem(items[0])
 
     def open_model_dialog(self):
-        dlg = ModelDialog(self)
+        global LOGIN_CRED
+        if LOGIN_CRED is None:
+            login = LoginDialog(self)
+            if login.exec_() == QtWidgets.QDialog.Accepted:
+                LOGIN_CRED = login.credentials()
+            else:
+                return
+        dlg = ModelDialog(auth=LOGIN_CRED, parent=self)
         dlg.exec_()
         self.models = list_installed_models()
         self.model_box.clear()
         self.model_box.addItems(self.models)
+
+    def rename_conversation(self, new_name):
+        old_path = LOG_DIR / f"{self.current_conversation}.txt"
+        new_path = LOG_DIR / f"{new_name}.txt"
+        if new_path.exists():
+            base = new_name
+            idx = 1
+            while (LOG_DIR / f"{base}_{idx}.txt").exists():
+                idx += 1
+            new_name = f"{base}_{idx}"
+            new_path = LOG_DIR / f"{new_name}.txt"
+        old_path.rename(new_path)
+        self.current_conversation = new_name
+        self.refresh_logs()
+        items = self.log_list.findItems(new_name, QtCore.Qt.MatchExactly)
+        if items:
+            self.log_list.setCurrentItem(items[0])
 
     def append_chat(self, speaker, text):
         self.chat_view.append(f"<b>{speaker}:</b> {text}")
@@ -204,6 +265,10 @@ class ChatWindow(QtWidgets.QWidget):
         if not text or not self.current_conversation:
             return
         self.entry.clear()
+        if self.temp_chat:
+            title = summarize_title(text)
+            self.rename_conversation(title)
+            self.temp_chat = False
         self.append_chat("You", text)
         model = self.model_box.currentText()
         thread = threading.Thread(target=self._request_response, args=(model, text), daemon=True)
